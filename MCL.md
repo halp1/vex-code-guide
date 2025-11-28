@@ -329,7 +329,7 @@ impl Line {
 
 We can now add the following function to the `Reading` struct to predict what the distance sensor would read if the robot were at a given particle's position:
 
-````rust
+```rust
 impl Reading {
   #[inline(always)]
   pub fn predict(&self, particle_pos: Point) -> Option<f32> {
@@ -341,13 +341,16 @@ impl Reading {
     )
   }
 }
+```
+
 Now that we have the raycasting set up, we can implement the update step.
 
 Here's our function header:
+
 ```rust
 pub fn update(&mut self, readings: Vec<Reading>) {
   let mut max_weight = 0.0f32;
-````
+```
 
 The first step is to loop over every particle and caluclate its weight. We start with a weight of 1.0 for each particle:
 
@@ -661,10 +664,10 @@ robot.pos.y = estimated_pos.y;
 For MCL to work effectively, you need to tune it properly. The best way to do this is to log the particle positions right before the resampling step onto an SD card and then visualize the point on your computer.
 
 A couple notes on implementing this on the VEX V5 Brain side:
-* Use 'append' mode when writing to the SD card: don't try and store the whole log in memory, or you will quickly run out of RAM.
-* JSON or CSV are good formats for logging data.
-* Read the `presample_x`, `presample_y`, and `presample_weights` arrays to get the particle data before resampling.
-* Log the estimated position as well for reference and plotting.
+
+- Use 'append' mode when writing to the SD card: don't try and store the whole log in memory, or you will quickly run out of RAM.
+- JSON or CSV are good formats for logging data.
+- Read the `presample_x`, `presample_y`, and `presample_weights` arrays to get the particle data before resampling.
+- Log the estimated position as well for reference and plotting.
 
 Generally, if the particles aren't converging within the bounds of your robot relatively quickly, you might want to reduce odometry noise in the prediction step.
-
