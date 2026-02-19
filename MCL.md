@@ -32,7 +32,7 @@ Finally, some actual code!
 
 ### Step -2: Prerequisites
 
-You need a simple `Point` struct to represent points, with operator overloading for convenience. Some libraries/templates may already have this.
+Some prerequisite structs (`Point`, `Position`, and `Rotation`) and their associated methods and operator overloads are defined in `Prerequisites.md`. You can use those directly, or implement your own versions in your codebase.
 
 ### Step -1: Randomization
 
@@ -40,74 +40,53 @@ In this demo, I use the XorShift32 random number generator. This is a very fast 
 
 Here's my XorShift32 implementation:
 
-```rust
-#[derive(Clone, Copy)]
-pub struct XorShift32 {
-  state: u32,
-}
+---
 
-impl XorShift32 {
-  #[inline(always)]
-  pub const fn new(seed: u32) -> Self {
-    Self {
-      state: if seed == 0 {
-        0x12345678
-      } else {
-        seed
-      },
-    }
-  }
+```cpp
+struct XorShift32 {
+  uint32_t state;
 
-  #[inline(always)]
-  pub fn next_u32(&mut self) -> u32 {
-    let mut x = self.state;
+  inline XorShift32(uint32_t seed = pros::micros())
+    : state(seed == 0 ? 0x12345678 : seed) {}
+
+  inline uint32_t next_u32() {
+    uint32_t x = state;
     x ^= x << 13;
     x ^= x >> 17;
     x ^= x << 5;
-    self.state = x;
-    x
+    state = x;
+    return x;
   }
 
-  #[inline(always)]
-  pub fn f32(&mut self) -> f32 {
-    (self.next_u32() >> 8) as f32 * (1.0 / (1u32 << 24) as f32)
+  inline float next_f32() {
+    return (next_u32() >> 8) * (1.0f / (1u << 24));
   }
 
-  #[inline(always)]
-  pub fn range_f32(&mut self, min: f32, max: f32) -> f32 {
-    min + (max - min) * self.f32()
+  inline float range_f32(float min, float max) {
+    return min + (max - min) * next_f32();
   }
 
   // box-muller transform, use ziggurat for optimization if you want
-  #[inline(always)]
-  pub fn gaussian(&mut self, std_dev: f32) -> f32 {
-    let u1 = self.f32().max(1e-12);
-    let u2 = self.f32();
-    let r = (-2.0 * u1.ln()).sqrt();
-    let theta = f32::consts::TAU * u2;
-    r * theta.cos() * std_dev
+  inline float gaussian(float std_dev) {
+    float u1 = std::max(next_f32(), 1e-12f);
+    float u2 = next_f32();
+    float r = std::sqrt(-2.0f * std::log(u1));
+    float theta = 2.0f * M_PI * u2;
+    return r * std::cos(theta) * std_dev;
   }
-}
-
-// rust specific default implementation
-
-impl Default for XorShift32 {
-  fn default() -> Self {
-    Self::new(unsafe { vex_sdk::vexSystemPowerupTimeGet() } as u32)
-  }
-}
+};
 ```
 
 ### Step 0: Setup
 
 First, we need some basic constants about the VEX Competition field:
 
-```rust
+```cpp
 // Official VEX Competition Field size in inches
-const FIELD_SIZE: f32 = 140.42;
-const HALF_SIZE: f32 = 0.5 * FIELD_SIZE;
-const FIELD_MIN: f32 = -HALF_SIZE;
-const FIELD_MAX: f32 = HALF_SIZE;
+const float FIELD_SIZE = 140.42f;
+const float HALF_SIZE = 0.5f * FIELD_SIZE;
+const float FIELD_MIN = -HALF_SIZE;
+const float FIELD_MAX = HALF_SIZE;
 ```
 
 For performance reasons, the MCL implementation here uses a SoA (Structure of Arrays) approach rather than a vector/array of structs approach.
@@ -116,82 +95,53 @@ The MCL struct is quite simple: We need arrays for the `x`, `y`, and `weight` of
 
 We also need a temporary set of arrays for resampling (you'll see why later), and the presampling arrays are used to store the state of the particles before resampling for debugging/logging purposes (more on this later).
 
-```rust
-pub struct MCL<const N: usize> {
-  pub particle_x: [f32; N],
-  pub particle_y: [f32; N],
-  pub particle_weights: [f32; N],
-
-  pub temp_x: [f32; N],
-  pub temp_y: [f32; N],
-  pub temp_weights: [f32; N],
-
-  pub presample_x: [f32; N],
-  pub presample_y: [f32; N],
-  pub presample_weights: [f32; N],
-
-  rng: XorShift32,
-}
-```
-
-Note that in C++, the fixed-size array implementation would look something like this:
-
 ```cpp
 template <size_t N>
 struct MCL {
   float particle_x[N];
   float particle_y[N];
   float particle_weights[N];
-  // etc
-};
-```
 
-If you happen to be using rust as well, you'll need a default implementation for MCL to initialize the arrays:
+  float temp_x[N];
+  float temp_y[N];
+  float temp_weights[N];
 
-```rust
-impl<const N: usize> Default for MCL<N> {
-  fn default() -> Self {
-    Self {
-      particle_x: [0.0; N],
-      particle_y: [0.0; N],
-      particle_weights: [1.0 / N as f32; N],
+  float presample_x[N];
+  float presample_y[N];
+  float presample_weights[N];
 
-      temp_x: [0.0; N],
-      temp_y: [0.0; N],
-      temp_weights: [0.0; N],
+  XorShift32 rng;
 
-      rng: XorShift32::default(),
-
-      presample_x: [0.0; N],
-      presample_y: [0.0; N],
-      presample_weights: [0.0; N],
-    }
+  MCL() : rng(pros::micros()) {
+    std::fill(particle_x, particle_x + N, 0.0f);
+    std::fill(particle_y, particle_y + N, 0.0f);
+    std::fill(particle_weights, particle_weights + N, 1.0f / N);
+    std::fill(temp_x, temp_x + N, 0.0f);
+    std::fill(temp_y, temp_y + N, 0.0f);
+    std::fill(temp_weights, temp_weights + N, 0.0f);
+    std::fill(presample_x, presample_x + N, 0.0f);
+    std::fill(presample_y, presample_y + N, 0.0f);
+    std::fill(presample_weights, presample_weights + N, 0.0f);
   }
-}
+};
 ```
 
 We'll also need to be able to capture the data about a distance sensor reading. The following struct captures a single sensor's actual reading, as well as information on its variance, relative position to the robot at a given heading, and a second point in the direction of the sensor's heading (used for raycasting later).
 
-```rust
-#[derive(Clone, Copy)]
-pub struct Reading {
-  pub recorded: f32,
-  pub inv_var: f32,
+```cpp
+struct Reading {
+  float recorded;
+  float inv_var;
 
-  pub relative_pos: Point,
-  pub proj_relative: Point,
-}
+  Point relative_pos;
+  Point proj_relative;
 
-impl Reading {
-  pub fn new(recorded: f32, std_dev: f32, relative_pos: Point, proj_relative: Point) -> Self {
-    Self {
-      recorded,
-      inv_var: -0.5 / (std_dev * std_dev),
-      relative_pos,
-      proj_relative,
-    }
-  }
-}
+  Reading(float recorded, float std_dev, Point relative_pos, Point proj_relative)
+    : recorded(recorded),
+      inv_var(-0.5f / (std_dev * std_dev)),
+      relative_pos(relative_pos),
+      proj_relative(proj_relative) {}
+};
 ```
 
 Note that we save the inverse variance multiplied by -0.5 to optimize the weight calculation later.
@@ -202,31 +152,20 @@ Whenever you set the robot's position programatically, such as at the start of a
 
 Additionally, you should seed your RNG based on the current system time to ensure a good random distribution.
 
-```rust
-pub fn init(&mut self, x: f32, y: f32, spread: f32) {
-	self.rng = XorShift32::new(unsafe { vex_sdk::vexSystemPowerupTimeGet() } as u32);
+```cpp
+template <size_t N>
+void MCL<N>::init(float x, float y, float spread) {
+  rng = XorShift32(pros::micros());
 
-  for i in 0..N {
-    self.particle_x[i] = (x + self.rng.range_f32(-spread, spread)).clamp(FIELD_MIN, FIELD_MAX);
-    self.particle_y[i] = (y + self.rng.range_f32(-spread, spread)).clamp(FIELD_MIN, FIELD_MAX);
-    self.particle_weights[i] = 1.0 / N as f32;
+  for (size_t i = 0; i < N; i++) {
+    particle_x[i] = std::clamp(x + rng.range_f32(-spread, spread), FIELD_MIN, FIELD_MAX);
+    particle_y[i] = std::clamp(y + rng.range_f32(-spread, spread), FIELD_MIN, FIELD_MAX);
+    particle_weights[i] = 1.0f / N;
   }
 }
 ```
 
 A good value for spread is about 2 or 3 inches, because generally, you have a pretty good idea of where the bot starts of the field.
-
-The C++ equivalent of
-
-```rust
-unsafe { vex_sdk::vexSystemPowerupTimeGet() }
-```
-
-is
-
-```cpp
-pros::micros()
-```
 
 ### Step 2: Prediction
 
@@ -234,14 +173,15 @@ Your odometry should be updating in a loop in your code, based on information fr
 
 There are two components to the prediction step: moving the particles based on odometry, and adding random noise to each particle.
 
-```rust
-/// step each particle but add some randomization as well
-pub fn predict(&mut self, dx: f32, dy: f32, std_dev: f32) {
-  for i in 0..N {
-    self.particle_x[i] += dx + self.rng.gaussian(std_dev);
-    self.particle_y[i] += dy + self.rng.gaussian(std_dev);
-    self.particle_x[i] = self.particle_x[i].clamp(FIELD_MIN, FIELD_MAX);
-    self.particle_y[i] = self.particle_y[i].clamp(FIELD_MIN, FIELD_MAX);
+```cpp
+// step each particle but add some randomization as well
+template <size_t N>
+void MCL<N>::predict(float dx, float dy, float std_dev) {
+  for (size_t i = 0; i < N; i++) {
+    particle_x[i] += dx + rng.gaussian(std_dev);
+    particle_y[i] += dy + rng.gaussian(std_dev);
+    particle_x[i] = std::clamp(particle_x[i], FIELD_MIN, FIELD_MAX);
+    particle_y[i] = std::clamp(particle_y[i], FIELD_MIN, FIELD_MAX);
   }
 }
 ```
@@ -256,91 +196,78 @@ First, however, we need to be able to predict what a distance sensor would read 
 
 We can define a `Line` to be a directed line segment from one point to another:
 
-```rust
-pub struct Line {
-  pub start: Point,
-  pub end: Point,
-}
+```cpp
+struct Line {
+  Point start;
+  Point end;
+};
 ```
 
 For the distance sensor raycasting, we can treat a Line as an infinite ray starting at `start` and going through `end` instead of a line segment. This allows us to highly optimize the calculation of the intersection point between the ray and the field boundaries.
 
-I won't get into the nitty gritty of exactly how this function works, but the key is that it returns the distance from the start of the ray to the intersection point with the field boundary. If there is no intersection, it returns `None`. In C++, you could use std::optional or just return -1.0 to indicate no intersection.
+I won't get into the nitty gritty of exactly how this function works, but the key is that it returns the distance from the start of the ray to the intersection point with the field boundary. If there is no intersection, it returns `std::nullopt`.
 
-```rust
-impl Line {
-  /// assumes line segments are actually rays
-  #[inline(always)]
-  pub fn square_intersect_distance(&self, center_x: f32, center_y: f32, width: f32, height: f32) -> Option<f32> {
-    let half_width = width * 0.5;
-    let half_height = height * 0.5;
+```cpp
+struct Line {
+  Point start;
+  Point end;
 
-    let rel_start_x = self.start.x - center_x;
-    let rel_start_y = self.start.y - center_y;
+  // assumes line segments are actually rays
+  inline std::optional<float> square_intersect_distance(float center_x, float center_y, float width, float height) const {
+    float half_width = width * 0.5f;
+    float half_height = height * 0.5f;
 
-    let dx = self.end.x - self.start.x;
-    let dy = self.end.y - self.start.y;
+    float rel_start_x = start.x - center_x;
+    float rel_start_y = start.y - center_y;
 
-    let mut best_t = f32::INFINITY;
+    float dx = end.x - start.x;
+    float dy = end.y - start.y;
+
+    float best_t = std::numeric_limits<float>::infinity();
 
     // check x sides
-    if dx.abs() > 1e-6 {
-      let inv_dx = 1.0 / dx;
-      let target_x = if dx > 0.0 {
-        half_width
-      } else {
-        -half_width
-      };
-      let t = (target_x - rel_start_x) * inv_dx;
+    if (std::abs(dx) > 1e-6f) {
+      float inv_dx = 1.0f / dx;
+      float target_x = dx > 0.0f ? half_width : -half_width;
+      float t = (target_x - rel_start_x) * inv_dx;
 
-      if t >= 0.0 {
-        let y = rel_start_y + t * dy;
-        if y.abs() <= half_height {
+      if (t >= 0.0f) {
+        float y = rel_start_y + t * dy;
+        if (std::abs(y) <= half_height) {
           best_t = t;
         }
       }
     }
 
     // check y sides
-    if dy.abs() > 1e-6 {
-      let inv_dy = 1.0 / dy;
-      let target_y = if dy > 0.0 {
-        half_height
-      } else {
-        -half_height
-      };
-      let t = (target_y - rel_start_y) * inv_dy;
+    if (std::abs(dy) > 1e-6f) {
+      float inv_dy = 1.0f / dy;
+      float target_y = dy > 0.0f ? half_height : -half_height;
+      float t = (target_y - rel_start_y) * inv_dy;
 
-      if t >= 0.0 && t < best_t {
-        let x = rel_start_x + t * dx;
-        if x.abs() <= half_width {
+      if (t >= 0.0f && t < best_t) {
+        float x = rel_start_x + t * dx;
+        if (std::abs(x) <= half_width) {
           best_t = t;
         }
       }
     }
 
-    if best_t < f32::INFINITY {
-      Some(best_t * dx.hypot(dy))
-    } else {
-      None
+    if (best_t < std::numeric_limits<float>::infinity()) {
+      return best_t * std::hypot(dx, dy);
     }
+    return std::nullopt;
   }
-}
+};
 ```
 
 We can now add the following function to the `Reading` struct to predict what the distance sensor would read if the robot were at a given particle's position:
 
-```rust
-impl Reading {
-  #[inline(always)]
-  pub fn predict(&self, particle_pos: Point) -> Option<f32> {
-    Line::new(self.relative_pos + particle_pos, self.proj_relative + particle_pos).square_intersect_distance(
-      0.0,
-      0.0,
-      constants::FIELD_SIZE,
-      constants::FIELD_SIZE,
-    )
-  }
+```cpp
+// inside Reading struct:
+inline std::optional<float> predict(Point particle_pos) const {
+  return Line{relative_pos + particle_pos, proj_relative + particle_pos}
+    .square_intersect_distance(0.0f, 0.0f, FIELD_SIZE, FIELD_SIZE);
 }
 ```
 
@@ -348,34 +275,33 @@ Now that we have the raycasting set up, we can implement the update step.
 
 Here's our function header:
 
-```rust
-pub fn update(&mut self, readings: Vec<Reading>) {
-  let mut max_weight = 0.0f32;
+```cpp
+template <size_t N>
+void MCL<N>::update(const std::vector<Reading>& readings) {
+  float max_weight = 0.0f;
 ```
 
 The first step is to loop over every particle and caluclate its weight. We start with a weight of 1.0 for each particle:
 
-```rust
-for i in 0..N {
-  let mut weight = 1.0f32;
+```cpp
+for (size_t i = 0; i < N; i++) {
+  float weight = 1.0f;
 ```
 
 Then, for each distance sensor reading:
 
-```rust
-for reading in readings.iter() {
+```cpp
+for (const auto& reading : readings) {
 ```
 
 We need to predict what the sensor would read if the robot were at this particle's position. If there is no intersection, we can set the weight to 0 and break out of the loop early.
 
-```rust
-if let Some(predicted) = reading.predict(Point {
-  x: self.particle_x[i],
-  y: self.particle_y[i],
-}) {
+```cpp
+auto predicted = reading.predict(Point{particle_x[i], particle_y[i]});
+if (predicted.has_value()) {
   // calculate weight
 } else {
-  weight = 0.0;
+  weight = 0.0f;
   break;
 }
 ```
@@ -391,59 +317,58 @@ Where `recorded` is the actual distance sensor reading, `predicted` is the predi
 
 This becomes:
 
-```rust
-let error = reading.recorded - predicted;
-weight *= (reading.inv_var * error * error).exp();
-if weight == 0.0 {
+```cpp
+float error = reading.recorded - predicted.value();
+weight *= std::exp(reading.inv_var * error * error);
+if (weight == 0.0f) {
   break;
 }
 ```
 
 After weighting the particle, we do some final checks:
 
-```rust
-if !weight.is_finite() || weight < 0.0 {
-  weight = 0.0;
+```cpp
+if (!std::isfinite(weight) || weight < 0.0f) {
+  weight = 0.0f;
 }
 
-self.particle_weights[i] = weight;
-if weight > max_weight {
+particle_weights[i] = weight;
+if (weight > max_weight) {
   max_weight = weight;
 }
 ```
 
-If you've been following along, you should have something akin to this (in the language you are using):
+If you've been following along, you should have something akin to this:
 
-```rust
-pub fn update(&mut self, readings: Vec<Reading>) {
-  let mut max_weight = 0.0f32;
+```cpp
+template <size_t N>
+void MCL<N>::update(const std::vector<Reading>& readings) {
+  float max_weight = 0.0f;
 
   // weight each particle
-  for i in 0..N {
-    let mut weight = 1.0f32;
+  for (size_t i = 0; i < N; i++) {
+    float weight = 1.0f;
 
-    for reading in readings.iter() {
-      if let Some(predicted) = reading.predict(Point {
-        x: self.particle_x[i],
-        y: self.particle_y[i],
-      }) {
-        let error = reading.recorded - predicted;
-        weight *= (reading.inv_var * error * error).exp();
-        if weight == 0.0 {
+    for (const auto& reading : readings) {
+      auto predicted = reading.predict(Point{particle_x[i], particle_y[i]});
+      if (predicted.has_value()) {
+        float error = reading.recorded - predicted.value();
+        weight *= std::exp(reading.inv_var * error * error);
+        if (weight == 0.0f) {
           break;
         }
       } else {
-        weight = 0.0;
+        weight = 0.0f;
         break;
       }
     }
 
-    if !weight.is_finite() || weight < 0.0 {
-      weight = 0.0;
+    if (!std::isfinite(weight) || weight < 0.0f) {
+      weight = 0.0f;
     }
 
-    self.particle_weights[i] = weight;
-    if weight > max_weight {
+    particle_weights[i] = weight;
+    if (weight > max_weight) {
       max_weight = weight;
     }
   }
@@ -451,36 +376,36 @@ pub fn update(&mut self, readings: Vec<Reading>) {
 
 Lastly, we make sure we have weights that sum to 1.0 and then normalize them:
 
-```rust
-  if max_weight <= 0.0 {
+```cpp
+  if (max_weight <= 0.0f) {
     // reset weights if all zero
-    let uniform_weight = 1.0 / N as f32;
-    for i in 0..N {
-      self.particle_weights[i] = uniform_weight;
+    float uniform_weight = 1.0f / N;
+    for (size_t i = 0; i < N; i++) {
+      particle_weights[i] = uniform_weight;
     }
 
     return;
   }
 
-  let mut weight_sum = 0.0f32;
-  for i in 0..N {
-    self.particle_weights[i] /= max_weight;
-    weight_sum += self.particle_weights[i];
+  float weight_sum = 0.0f;
+  for (size_t i = 0; i < N; i++) {
+    particle_weights[i] /= max_weight;
+    weight_sum += particle_weights[i];
   }
 
-  if weight_sum <= 0.0 {
+  if (weight_sum <= 0.0f) {
     // reset weights if all zero
-    let uniform_weight = 1.0 / N as f32;
-    for i in 0..N {
-      self.particle_weights[i] = uniform_weight;
+    float uniform_weight = 1.0f / N;
+    for (size_t i = 0; i < N; i++) {
+      particle_weights[i] = uniform_weight;
     }
 
     return;
   }
 
-  let inv_weight_sum = 1.0 / weight_sum;
-  for i in 0..N {
-    self.particle_weights[i] *= inv_weight_sum;
+  float inv_weight_sum = 1.0f / weight_sum;
+  for (size_t i = 0; i < N; i++) {
+    particle_weights[i] *= inv_weight_sum;
   }
 }
 ```
@@ -489,20 +414,18 @@ Lastly, we make sure we have weights that sum to 1.0 and then normalize them:
 
 To get the estimated position of the robot, we simply calculate the weighted average of all the particles' positions:
 
-```rust
-pub fn estimate(&self) -> Point {
-  let mut est_x = 0.0f32;
-  let mut est_y = 0.0f32;
+```cpp
+template <size_t N>
+Point MCL<N>::estimate() const {
+  float est_x = 0.0f;
+  float est_y = 0.0f;
 
-  for i in 0..N {
-    est_x += self.particle_x[i] * self.particle_weights[i];
-    est_y += self.particle_y[i] * self.particle_weights[i];
+  for (size_t i = 0; i < N; i++) {
+    est_x += particle_x[i] * particle_weights[i];
+    est_y += particle_y[i] * particle_weights[i];
   }
 
-  Point {
-    x: est_x,
-    y: est_y,
-  }
+  return Point{est_x, est_y};
 }
 ```
 
@@ -512,49 +435,50 @@ For resampling, we use a highly perfomant systematic sampling implementation.
 
 To start, we save the current weights and positions of the particles for debugging/logging purposes:
 
-```rust
-pub fn resample(&mut self) {
-  self.presample_x.copy_from_slice(&self.particle_x);
-  self.presample_y.copy_from_slice(&self.particle_y);
-  self.presample_weights.copy_from_slice(&self.particle_weights);
+```cpp
+template <size_t N>
+void MCL<N>::resample() {
+  std::copy(particle_x, particle_x + N, presample_x);
+  std::copy(particle_y, particle_y + N, presample_y);
+  std::copy(particle_weights, particle_weights + N, presample_weights);
 ```
 
 Our goal is to divide the range [0.0, 1.0] into N segments, where each segment corresponds to a particle and its weight. A higher weight means a larger segment. Think of it like making each particle a "bucket", and the size of the bucket is proportional to its weight.
 
 We precalulate the reciprocal of N for optimization, and an initial random offset:
 
-```rust
-let inv_n = 1.0 / N as f32;
-let offset = self.rng.f32() * inv_n;
+```cpp
+float inv_n = 1.0f / N;
+float offset = rng.next_f32() * inv_n;
 ```
 
 We also need to keep track of the cumulative weight at the current index:
 
-```rust
-let mut cumulative_weight = self.particle_weights[0];
-let mut idx = 0;
+```cpp
+float cumulative_weight = particle_weights[0];
+size_t idx = 0;
 ```
 
 For every particle;
 
-```rust
-for i in 0..N {
+```cpp
+for (size_t i = 0; i < N; i++) {
 ```
 
 Inside the loop, our goal is to drop a "pin" at intervals of `inv_n`, starting from `uniform_offset`, and see which particle's bucket it falls into. This means that particles with larger weights (bigger buckets) will have more "pins falling into them". In other words, they are more likely to be selected (possibly multiple times).
 
 We first calculate the position of our sample:
 
-```rust
-let sample = offset + (i as f32) * inv_n;
+```cpp
+float sample = offset + i * inv_n;
 ```
 
 We then find the index of the particle whose cumulative weight is just greater than or equal to our sample. This is done using a simple linear search:
 
-```rust
-while sample > cumulative_weight && idx < N - 1 {
-	idx += 1;
-	cumulative_weight += self.particle_weights[idx];
+```cpp
+while (sample > cumulative_weight && idx < N - 1) {
+  idx++;
+  cumulative_weight += particle_weights[idx];
 }
 ```
 
@@ -562,51 +486,52 @@ However, note that idx is NOT reset for each iteration of the outer loop. This m
 
 Finally, we assign the selected particle's position and new weight (which is just 1/N, because each particle is equally likely after resampling) to the temporary arrays:
 
-```rust
-self.temp_x[i] = self.particle_x[idx.min(N - 1)];
-self.temp_y[i] = self.particle_y[idx.min(N - 1)];
-self.temp_weights[i] = inv_n;
+```cpp
+temp_x[i] = particle_x[std::min(idx, N - 1)];
+temp_y[i] = particle_y[std::min(idx, N - 1)];
+temp_weights[i] = inv_n;
 ```
 
 Outside of the loop, we copy the temporary arrays back to the main particle arrays:
 
-```rust
-self.particle_x.copy_from_slice(&self.temp_x);
-self.particle_y.copy_from_slice(&self.temp_y);
-self.particle_weights.copy_from_slice(&self.temp_weights);
+```cpp
+std::copy(temp_x, temp_x + N, particle_x);
+std::copy(temp_y, temp_y + N, particle_y);
+std::copy(temp_weights, temp_weights + N, particle_weights);
 ```
 
 The full resampling function now looks like this:
 
-```rust
-pub fn resample(&mut self) {
-	self.presample_x.copy_from_slice(&self.particle_x);
-	self.presample_y.copy_from_slice(&self.particle_y);
-	self.presample_weights.copy_from_slice(&self.particle_weights);
+```cpp
+template <size_t N>
+void MCL<N>::resample() {
+	std::copy(particle_x, particle_x + N, presample_x);
+	std::copy(particle_y, particle_y + N, presample_y);
+	std::copy(particle_weights, particle_weights + N, presample_weights);
 
-	let inv_n = 1.0 / N as f32;
+	float inv_n = 1.0f / N;
 
-	let offset = self.rng.f32() * inv_n;
+	float offset = rng.next_f32() * inv_n;
 
-	let mut cumulative_weight = self.particle_weights[0];
-	let mut idx = 0;
+	float cumulative_weight = particle_weights[0];
+	size_t idx = 0;
 
-	for i in 0..N {
-		let sample = offset + (i as f32) * inv_n;
+	for (size_t i = 0; i < N; i++) {
+		float sample = offset + i * inv_n;
 
-		while sample > cumulative_weight && idx < N - 1 {
-			idx += 1;
-			cumulative_weight += self.particle_weights[idx];
+		while (sample > cumulative_weight && idx < N - 1) {
+			idx++;
+			cumulative_weight += particle_weights[idx];
 		}
 
-		self.temp_x[i] = self.particle_x[idx];
-		self.temp_y[i] = self.particle_y[idx];
-		self.temp_weights[i] = inv_n;
+		temp_x[i] = particle_x[idx];
+		temp_y[i] = particle_y[idx];
+		temp_weights[i] = inv_n;
 	}
 
-	self.particle_x.copy_from_slice(&self.temp_x);
-	self.particle_y.copy_from_slice(&self.temp_y);
-	self.particle_weights.copy_from_slice(&self.temp_weights);
+	std::copy(temp_x, temp_x + N, particle_x);
+	std::copy(temp_y, temp_y + N, particle_y);
+	std::copy(temp_weights, temp_weights + N, particle_weights);
 }
 ```
 
@@ -624,8 +549,8 @@ A good estimate for the standard deviation of the odometry updates is the hypote
 
 Additionally, **you may need to tune this value based on your robot and testing results.**
 
-```rust
-mcl.predict(dx, dy, dx.hypot(dy) / 4.0);
+```cpp
+mcl.predict(dx, dy, std::hypot(dx, dy) / 4.0f);
 ```
 
 ### Step 2: Get and process distance sensor readings:
@@ -642,26 +567,113 @@ Finally, to calculate the sensor's standard deviation, we use the information gi
 
 This "accuracy" refers to 3 standard devations, so to get the standard deviation, we can use the following formula (which has been converted to inches):
 
-```rust
+```cpp
 // d is in inches here
-let d = sensor.get_distance();
-let bound = if d < 7.874015 {
-	0.590551f32
-} else {
-	0.05_f32 * d
-};
+float d = sensor.get_distance();
+float bound = d < 7.874015f ? 0.590551f : 0.05f * d;
 
-const K: f32 = 3.0;
-let std_dev = (bound / K).max(1e-6_f32);
+const float K = 3.0f;
+float std_dev = std::max(bound / K, 1e-6f);
 ```
 
 This gives you the information you need to construct a `Reading` struct for each valid distance sensor reading.
 
-# Step 2.5: Update
+Here's my implementation of this process, which also includes raycasting for field elements like the match loader and goal bases.
+
+First, some field constants:
+
+```cpp
+// the distance from the center of the wall to the back center of the loader in inches
+constexpr float LOADER_X = 47.0f;
+
+// loader width / 2
+constexpr float LOADER_RADIUS = 3.0f;
+
+// padding to add to each side (except the back) of the loader for collision detection
+constexpr float LOADER_PADDING = 0.5f;
+
+constexpr float LOADER_WIDTH = LOADER_RADIUS * 2.0f + LOADER_PADDING * 2.0f;
+constexpr float LOADER_LENGTH = LOADER_RADIUS * 2.0f + LOADER_PADDING;
+
+// actual loader geo in (x, y)
+constexpr std::array<std::pair<float, float>, 4> LOADERS = {{
+  // bottom left
+  {-LOADER_X, -(FIELD_SIZE / 2.0f) + LOADER_RADIUS + LOADER_PADDING / 2.0f},
+  // top left
+  {-LOADER_X,  (FIELD_SIZE / 2.0f) - LOADER_RADIUS - LOADER_PADDING / 2.0f},
+  // top right
+  { LOADER_X,  (FIELD_SIZE / 2.0f) - LOADER_RADIUS - LOADER_PADDING / 2.0f},
+  // bottom right
+  { LOADER_X, -(FIELD_SIZE / 2.0f) + LOADER_RADIUS + LOADER_PADDING / 2.0f},
+}};
+
+constexpr float GOAL_X = 48.0f;
+constexpr float GOAL_Y = 23.0f;
+
+constexpr float GOAL_PADDING = 1.0f;
+
+constexpr float GOAL_WIDTH = 6.0f + GOAL_PADDING * 2.0f;
+constexpr float GOAL_LENGTH = 3.0f + GOAL_PADDING * 2.0f;
+
+constexpr std::array<std::pair<float, float>, 4> GOALS = {{
+  // bottom left
+  {-GOAL_X, -GOAL_Y},
+  // top left
+  {-GOAL_X,  GOAL_Y},
+  // top right
+  { GOAL_X,  GOAL_Y},
+  // bottom right
+  { GOAL_X, -GOAL_Y},
+}};
+
+constexpr float CENTER_PADDING = 1.0f;
+constexpr float CENTER_WIDTH = 21.0f + CENTER_PADDING * 2.0f;
+constexpr float CENTER_LENGTH = 21.0f + CENTER_PADDING * 2.0f;
+
+constexpr std::pair<float, float> CENTER_POS = {0.0f, 0.0f};
+```
+
+Then, I use the existing line-square intersection algorithm to check if the sensor is pointing at any of the field elements, and if so, I drop the reading:
+
+```cpp
+std::vector<Reading> readings;
+
+for (auto& sensor : sensors) {
+  auto v = sensor.get();
+  auto p = sensor.predict(pos);
+
+  if (!v || !p) continue;
+  if (std::abs(*v - *p) > mcl_tolerance) continue;
+
+  Position relative_pos = sensor.offset.rotate(pos.theta);
+  Point ray_pt = relative_pos.point() + Point{relative_pos.theta.cos(), relative_pos.theta.sin()};
+  Line ray{relative_pos.point() + pos.point(), ray_pt + pos.point()};
+
+  bool hits_obstacle =
+    std::any_of(LOADERS.begin(), LOADERS.end(), [&](const auto& loader) {
+      return ray.square_intersect_distance(loader.first, loader.second, LOADER_WIDTH, LOADER_LENGTH).has_value();
+    }) ||
+    std::any_of(GOALS.begin(), GOALS.end(), [&](const auto& goal) {
+      return ray.square_intersect_distance(goal.first, goal.second, GOAL_WIDTH, GOAL_LENGTH).has_value();
+    }) ||
+    ray.square_intersect_distance(CENTER_POS.first, CENTER_POS.second, CENTER_WIDTH, CENTER_LENGTH).has_value();
+
+  if (hits_obstacle) continue;
+
+  float d = *v;
+  float bound = d < 7.874015f ? 0.590551f : 0.05f * d;
+  constexpr float K = 3.0f;
+  float std_dev = std::max(bound / K, 1e-6f);
+
+  readings.emplace_back(d, std_dev, relative_pos.point(), ray_pt);
+}
+```
+
+## Step 2.5: Update
 
 Now that you have a vector of `Reading` structs, you can call the update step:
 
-```rust
+```cpp
 mcl.update(readings);
 ```
 
@@ -669,8 +681,8 @@ mcl.update(readings);
 
 Finally, you can get the estimated position of the robot and update your robot's position accordingly:
 
-```rust
-let estimated_pos = mcl.estimate();
+```cpp
+Point estimated_pos = mcl.estimate();
 robot.pos.x = estimated_pos.x;
 robot.pos.y = estimated_pos.y;
 ```
@@ -679,7 +691,7 @@ robot.pos.y = estimated_pos.y;
 
 After updating the weights, you can resample the particles:
 
-```rust
+```cpp
 mcl.resample();
 ```
 
